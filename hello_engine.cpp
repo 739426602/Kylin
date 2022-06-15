@@ -1,8 +1,9 @@
 #include<iostream>
 #include<assert.h>
 
-void  main() 
+int main() 
 {
-	std::cout << "hello kyline engine" << std::endl;
+	std::cout << "hello kylin" << std::endl;
 	assert(0);
+	return 0;
 }
