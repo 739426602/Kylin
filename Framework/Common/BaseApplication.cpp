@@ -1,8 +1,9 @@
 #include "BaseApplication.h"
 
+bool kylin::BaseApplication::m_bQuit = false;
+
 int kylin::BaseApplication::Initialize() 
 {
-	m_bQuit = false;
 	return 0;
 }
 

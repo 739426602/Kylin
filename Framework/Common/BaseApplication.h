@@ -14,6 +14,6 @@ namespace kylin
 		virtual bool IsQuit();
 
 	protected:
-		bool m_bQuit;
+		static bool m_bQuit;
 	};
 }
