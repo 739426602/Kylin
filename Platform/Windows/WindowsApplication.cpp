@@ -17,27 +17,21 @@ int kylin::WindowsApplication:: Initialize()
 	HINSTANCE hInstance = GetModuleHandle(NULL);
 	
 	// Register the window class.
-    const wchar_t CLASS_NAME[] = L"Sample Window Class";
 
-    WNDCLASSEX wc;
+    WNDCLASS wc = {};
 
-    ZeroMemory(&wc, sizeof(WNDCLASSEX));
-    wc.cbSize = sizeof(WNDCLASSEX);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)COLOR_WINDOW;
     wc.lpszClassName = _T("Hello Kylin");
 
-    RegisterClassEx(&wc);
+    RegisterClass(&wc);
 
     // Create the window.
 
-    HWND hwnd = CreateWindowExW(
+    HWND hwnd = CreateWindowEx(
         0,                              // Optional window styles.
-        L"Hello Kylin",                     // Window class
-        L"Kylin",    // Window text
+        _T("Hello Kylin"),                     // Window class
+        _T("Kylin"),    // Window text
         WS_OVERLAPPEDWINDOW,            // Window style
 
         // Size and position
