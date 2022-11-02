@@ -1,10 +1,6 @@
 #include "WindowsApplication.h"
 
-namespace kylin 
-{
-	WindowsApplication g_App;
-	IApplication* g_pApp = &g_App;
-}
+
 
 int kylin::WindowsApplication:: Initialize()
 {
@@ -14,41 +10,9 @@ int kylin::WindowsApplication:: Initialize()
     if (result != 0)
         exit(result);
 	
-	HINSTANCE hInstance = GetModuleHandle(NULL);
-	
-	// Register the window class.
+    CreateMainWindow();
 
-    WNDCLASS wc = {};
-
-    wc.lpfnWndProc = WindowProc;
-    wc.hInstance = hInstance;
-    wc.lpszClassName = _T("Hello Kylin");
-
-    RegisterClass(&wc);
-
-    // Create the window.
-
-    HWND hwnd = CreateWindowEx(
-        0,                              // Optional window styles.
-        _T("Hello Kylin"),                     // Window class
-        _T("Kylin"),    // Window text
-        WS_OVERLAPPEDWINDOW,            // Window style
-
-        // Size and position
-        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-
-        NULL,       // Parent window    
-        NULL,       // Menu
-        hInstance,  // Instance handle
-        NULL        // Additional application data
-    );
-
-    if (hwnd == NULL)
-    {
-        return 0;
-    }
-	
-	ShowWindow(hwnd, SW_SHOW);
+    ShowWindow(m_hwnd, SW_SHOW);
 
     return result;
 }
@@ -68,6 +32,38 @@ void kylin::WindowsApplication:: Tick()
         // send the message to the WindowProc function
         DispatchMessage(&msg); 
     }
+}
+
+void kylin::WindowsApplication::CreateMainWindow() 
+{
+    HINSTANCE hInstance = GetModuleHandle(NULL);
+
+    // Initialize the window class.
+    WNDCLASSEX windowClass = { 0 };
+    windowClass.cbSize = sizeof(WNDCLASSEX);
+    windowClass.style = CS_HREDRAW | CS_VREDRAW;
+    windowClass.lpfnWndProc = WindowProc;
+    windowClass.hInstance = hInstance;
+    windowClass.hCursor = LoadCursor(NULL, IDC_ARROW);
+    windowClass.lpszClassName = L"Kylin";
+    RegisterClassEx(&windowClass);
+
+    RECT windowRect = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
+    AdjustWindowRect(&windowRect, WS_OVERLAPPEDWINDOW, FALSE);
+    // Create the window and store a handle to it.
+    m_hwnd = CreateWindow(
+        windowClass.lpszClassName,
+        name.c_str(),
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        windowRect.right - windowRect.left,
+        windowRect.bottom - windowRect.top,
+        nullptr,        // We have no parent window.
+        nullptr,        // We aren't using menus.
+        hInstance,
+        nullptr);
+
 }
 
 void kylin::WindowsApplication:: Finalize()
