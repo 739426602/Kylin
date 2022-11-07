@@ -31,6 +31,8 @@ namespace kylin
 		UINT width = 1280;
 		UINT height = 720;
 		std::wstring name = L"Kylin";
+		// this struct holds Windows event messages
+		MSG msg;
 
 	};
 }

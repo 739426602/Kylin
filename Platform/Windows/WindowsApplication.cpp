@@ -19,9 +19,6 @@ int kylin::WindowsApplication:: Initialize()
 
 void kylin::WindowsApplication:: Tick()
 {
-	// this struct holds Windows event messages
-    MSG msg;
-
     // we use PeekMessage instead of GetMessage here
     // because we should not block the thread at anywhere
     // except the engine execution driver module 
@@ -62,7 +59,7 @@ void kylin::WindowsApplication::CreateMainWindow()
         nullptr,        // We have no parent window.
         nullptr,        // We aren't using menus.
         hInstance,
-        nullptr);
+        this);
 
 }
 
@@ -73,8 +70,16 @@ void kylin::WindowsApplication:: Finalize()
 
 LRESULT CALLBACK kylin::WindowsApplication:: WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    WindowsApplication* windowsApplication = reinterpret_cast<WindowsApplication*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
     switch (uMsg)
     {
+    case WM_CREATE:
+    {
+        // Save the DXSample* passed in to CreateWindow.
+        LPCREATESTRUCT pCreateStruct = reinterpret_cast<LPCREATESTRUCT>(lParam);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pCreateStruct->lpCreateParams));
+    }
+    return 0;
     case WM_DESTROY:
         PostQuitMessage(0);
         BaseApplication::m_bQuit = true;
@@ -82,14 +87,7 @@ LRESULT CALLBACK kylin::WindowsApplication:: WindowProc(HWND hwnd, UINT uMsg, WP
 
     case WM_PAINT:
     {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
 
-        // All painting occurs here, between BeginPaint and EndPaint.
-
-        FillRect(hdc, &ps.rcPaint, (HBRUSH)(COLOR_WINDOW + 1));
-
-        EndPaint(hwnd, &ps);
     }
     return 0;
 
