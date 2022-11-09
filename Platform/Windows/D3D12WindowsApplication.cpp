@@ -14,7 +14,10 @@ namespace kylin
         m_viewport = CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
         m_scissorRect = CD3DX12_RECT(0, 0, static_cast<LONG>(width), static_cast<LONG>(height));
         m_rtvDescriptorSize = 0;
-
+        m_fenceValues[0] = 0;
+        m_fenceValues[1] = 0;
+        m_pCbvDataBegin = nullptr;
+        m_constantBufferData = {};
         HINSTANCE hInstance = GetModuleHandle(NULL);
 
         // Initialize the window class.
@@ -219,28 +222,40 @@ namespace kylin
 
             // Describe and create a shader resource view (SRV) heap for the texture.
             D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-            srvHeapDesc.NumDescriptors = 1;
+            srvHeapDesc.NumDescriptors = 2;
             srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
             srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             ThrowIfFailed(m_device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&m_srvHeap)));
 
             m_rtvDescriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+            // Describe and create a constant buffer view (CBV) descriptor heap.
+            // Flags indicate that this descriptor heap can be bound to the pipeline 
+            // and that descriptors contained in it can be referenced by a root table.
+            D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
+            cbvHeapDesc.NumDescriptors = 1;
+            cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+            cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+            ThrowIfFailed(m_device->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&m_cbvHeap)));
+
         }
 
         // Create frame resources.
         {
             CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvHeap->GetCPUDescriptorHandleForHeapStart());
 
-            // Create a RTV for each frame.
+            // Create a RTV and a command allocator for each frame.
             for (UINT n = 0; n < FrameCount; n++)
             {
                 ThrowIfFailed(m_swapChain->GetBuffer(n, IID_PPV_ARGS(&m_renderTargets[n])));
                 m_device->CreateRenderTargetView(m_renderTargets[n].Get(), nullptr, rtvHandle);
                 rtvHandle.Offset(1, m_rtvDescriptorSize);
+
+                ThrowIfFailed(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_commandAllocators[n])));
             }
         }
 
-        ThrowIfFailed(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_commandAllocator)));
+        
     }
 
     // Load the sample assets.
@@ -258,11 +273,13 @@ namespace kylin
                 featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
             }
 
-            CD3DX12_DESCRIPTOR_RANGE1 ranges[1];
+            CD3DX12_DESCRIPTOR_RANGE1 ranges[2];
             ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+            ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
 
-            CD3DX12_ROOT_PARAMETER1 rootParameters[1];
+            CD3DX12_ROOT_PARAMETER1 rootParameters[2];
             rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_PIXEL);
+            rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_VERTEX);
 
             D3D12_STATIC_SAMPLER_DESC sampler = {};
             sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
@@ -279,8 +296,15 @@ namespace kylin
             sampler.RegisterSpace = 0;
             sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+            // Allow input layout and deny uneccessary access to certain pipeline stages.
+            D3D12_ROOT_SIGNATURE_FLAGS rootSignatureFlags =
+                D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
+                D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
+                D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
+                D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS;
+
             CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
-            rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+            rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &sampler, rootSignatureFlags);
 
             ComPtr<ID3DBlob> signature;
             ComPtr<ID3DBlob> error;
@@ -329,7 +353,7 @@ namespace kylin
         }
 
         // Create the command list.
-        ThrowIfFailed(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_commandAllocator.Get(), m_pipelineState.Get(), IID_PPV_ARGS(&m_commandList)));
+        ThrowIfFailed(m_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_commandAllocators[m_frameIndex].Get(), m_pipelineState.Get(), IID_PPV_ARGS(&m_commandList)));
 
         // Create the vertex buffer.
         {
@@ -366,6 +390,7 @@ namespace kylin
             m_vertexBufferView.BufferLocation = m_vertexBuffer->GetGPUVirtualAddress();
             m_vertexBufferView.StrideInBytes = sizeof(Vertex);
             m_vertexBufferView.SizeInBytes = vertexBufferSize;
+
         }
 
         // Note: ComPtr's are CPU objects but this resource needs to stay in scope until
@@ -428,6 +453,33 @@ namespace kylin
             m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_srvHeap->GetCPUDescriptorHandleForHeapStart());
         }
 
+        // Create the constant buffer.
+        {
+            const UINT constantBufferSize = sizeof(SceneConstantBuffer);    // CB size is required to be 256-byte aligned.
+
+            ThrowIfFailed(m_device->CreateCommittedResource(
+                &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+                D3D12_HEAP_FLAG_NONE,
+                &CD3DX12_RESOURCE_DESC::Buffer(constantBufferSize),
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr,
+                IID_PPV_ARGS(&m_constantBuffer)));
+
+            // Describe and create a constant buffer view.
+            D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+            cbvDesc.BufferLocation = m_constantBuffer->GetGPUVirtualAddress();
+            cbvDesc.SizeInBytes = constantBufferSize;
+            UINT size = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            CD3DX12_CPU_DESCRIPTOR_HANDLE cbvHeapHandle(m_srvHeap->GetCPUDescriptorHandleForHeapStart(), 1, size);
+            m_device->CreateConstantBufferView(&cbvDesc, cbvHeapHandle);
+
+            // Map and initialize the constant buffer. We don't unmap this until the
+            // app closes. Keeping things mapped for the lifetime of the resource is okay.
+            CD3DX12_RANGE readRange(0, 0);        // We do not intend to read from this resource on the CPU.
+            ThrowIfFailed(m_constantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&m_pCbvDataBegin)));
+            memcpy(m_pCbvDataBegin, &m_constantBufferData, sizeof(m_constantBufferData));
+        }
+
         // Close the command list and execute it to begin the initial GPU setup.
         ThrowIfFailed(m_commandList->Close());
         ID3D12CommandList* ppCommandLists[] = { m_commandList.Get() };
@@ -435,8 +487,8 @@ namespace kylin
 
         // Create synchronization objects and wait until assets have been uploaded to the GPU.
         {
-            ThrowIfFailed(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
-            m_fenceValue = 1;
+            ThrowIfFailed(m_device->CreateFence(m_fenceValues[m_frameIndex], D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
+            m_fenceValues[m_frameIndex]++;
 
             // Create an event handle to use for frame synchronization.
             m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -448,7 +500,7 @@ namespace kylin
             // Wait for the command list to execute; we are reusing the same command 
             // list in our main loop but for now, we just want to wait for setup to 
             // complete before continuing.
-            WaitForPreviousFrame();
+            WaitForGpu();
         }
     }
 
@@ -494,20 +546,22 @@ namespace kylin
         // Command list allocators can only be reset when the associated 
            // command lists have finished execution on the GPU; apps should use 
            // fences to determine GPU execution progress.
-        ThrowIfFailed(m_commandAllocator->Reset());
+        ThrowIfFailed(m_commandAllocators[m_frameIndex]->Reset());
 
         // However, when ExecuteCommandList() is called on a particular command 
         // list, that command list can then be reset at any time and must be before 
         // re-recording.
-        ThrowIfFailed(m_commandList->Reset(m_commandAllocator.Get(), m_pipelineState.Get()));
+        ThrowIfFailed(m_commandList->Reset(m_commandAllocators[m_frameIndex].Get(), m_pipelineState.Get()));
 
         // Set necessary state.
         m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
 
         ID3D12DescriptorHeap* ppHeaps[] = { m_srvHeap.Get() };
         m_commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
-
+        UINT size = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        CD3DX12_GPU_DESCRIPTOR_HANDLE cbvHandle(m_srvHeap->GetGPUDescriptorHandleForHeapStart(), 1, size);
         m_commandList->SetGraphicsRootDescriptorTable(0, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+        m_commandList->SetGraphicsRootDescriptorTable(1, cbvHandle);
         m_commandList->RSSetViewports(1, &m_viewport);
         m_commandList->RSSetScissorRects(1, &m_scissorRect);
 
@@ -529,31 +583,53 @@ namespace kylin
 
         ThrowIfFailed(m_commandList->Close());
     }
-    void D3D12WindowsApplication::WaitForPreviousFrame()
+    // Wait for pending GPU work to complete.
+    void D3D12WindowsApplication::WaitForGpu()
     {
-        // WAITING FOR THE FRAME TO COMPLETE BEFORE CONTINUING IS NOT BEST PRACTICE.
-        // This is code implemented as such for simplicity. The D3D12HelloFrameBuffering
-        // sample illustrates how to use fences for efficient resource usage and to
-        // maximize GPU utilization.
+        // Schedule a Signal command in the queue.
+        ThrowIfFailed(m_commandQueue->Signal(m_fence.Get(), m_fenceValues[m_frameIndex]));
 
-        // Signal and increment the fence value.
-        const UINT64 fence = m_fenceValue;
-        ThrowIfFailed(m_commandQueue->Signal(m_fence.Get(), fence));
-        m_fenceValue++;
+        // Wait until the fence has been processed.
+        ThrowIfFailed(m_fence->SetEventOnCompletion(m_fenceValues[m_frameIndex], m_fenceEvent));
+        WaitForSingleObjectEx(m_fenceEvent, INFINITE, FALSE);
 
-        // Wait until the previous frame is finished.
-        if (m_fence->GetCompletedValue() < fence)
+        // Increment the fence value for the current frame.
+        m_fenceValues[m_frameIndex]++;
+    }
+
+    // Prepare to render the next frame.
+    void D3D12WindowsApplication::MoveToNextFrame()
+    {
+        // Schedule a Signal command in the queue.
+        const UINT64 currentFenceValue = m_fenceValues[m_frameIndex];
+        ThrowIfFailed(m_commandQueue->Signal(m_fence.Get(), currentFenceValue));
+
+        // Update the frame index.
+        m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
+
+        // If the next frame is not ready to be rendered yet, wait until it is ready.
+        if (m_fence->GetCompletedValue() < m_fenceValues[m_frameIndex])
         {
-            ThrowIfFailed(m_fence->SetEventOnCompletion(fence, m_fenceEvent));
-            WaitForSingleObject(m_fenceEvent, INFINITE);
+            ThrowIfFailed(m_fence->SetEventOnCompletion(m_fenceValues[m_frameIndex], m_fenceEvent));
+            WaitForSingleObjectEx(m_fenceEvent, INFINITE, FALSE);
         }
 
-        m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
+        // Set the fence value for the next frame.
+        m_fenceValues[m_frameIndex] = currentFenceValue + 1;
     }
 
     // Update frame-based values.
     void D3D12WindowsApplication::OnUpdate()
     {
+        const float translationSpeed = 0.005f;
+        const float offsetBounds = 1.25f;
+
+        m_constantBufferData.offset.x += translationSpeed;
+        if (m_constantBufferData.offset.x > offsetBounds)
+        {
+            m_constantBufferData.offset.x = -offsetBounds;
+        }
+        memcpy(m_pCbvDataBegin, &m_constantBufferData, sizeof(m_constantBufferData));
     }
 
     // Render the scene.
@@ -569,15 +645,20 @@ namespace kylin
         // Present the frame.
         ThrowIfFailed(m_swapChain->Present(1, 0));
 
-        WaitForPreviousFrame();
+        MoveToNextFrame();
     }
     
     void D3D12WindowsApplication::OnDestroy()
     {
         // Ensure that the GPU is no longer referencing resources that are about to be
         // cleaned up by the destructor.
-        WaitForPreviousFrame();
+        WaitForGpu();
 
         CloseHandle(m_fenceEvent);
+    }
+    void D3D12WindowsApplication::Finalize() 
+    {
+        OnDestroy();
+        WindowsApplication::Finalize();
     }
 }
